@@ -191,12 +191,11 @@ ${inputs.join('\n')}
 
         const scenarios = JSON.parse(jsonText);
         
-        if (!Array.isArray(scenarios) || scenarios.length === 0) {
+        if (!Array.isArray(scenarios) || scenarios.length === 0 || !scenarios.every(s => typeof s === 'string')) {
             throw new Error("AI did not return a valid array of scenario strings.");
         }
         
-        // Ensure strict string conversion to avoid 'Object as child' React errors
-        return scenarios.slice(0, 5).map(s => String(s));
+        return scenarios.slice(0, 5); // Ensure exactly 5 are returned
     } catch (error) {
         console.error("Error generating scenarios:", error);
         const rawErrorMessage = error instanceof Error ? error.message : JSON.stringify(error);
