@@ -133,7 +133,9 @@ const useMediaGeneration = () => {
         const result = await generator();
         onSuccess(result);
       } catch (error) {
-        onError(error as Error);
+        // Ensure we always pass an Error object
+        const safeError = error instanceof Error ? error : new Error(String(error));
+        onError(safeError);
       }
     });
   };
@@ -156,7 +158,6 @@ const ImageUploadBox: React.FC<{
     const newImageUrls: string[] = [];
     let filesProcessed = 0;
 
-    // FIX: Explicitly type 'file' as 'File' to resolve TypeScript inference error.
     files.forEach((file: File) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -178,7 +179,6 @@ const ImageUploadBox: React.FC<{
         reader.readAsDataURL(file);
     });
     
-    // Reset file input to allow re-uploading the same file
     if(event.target) {
         event.target.value = '';
     }
@@ -264,6 +264,9 @@ const ImageCard: React.FC<{
 }> = ({ image, style, index, onRegenerate, onDownload, scenario }) => {
   const [imageLoaded, setImageLoaded] = useState(false);
 
+  // Safely extract error string
+  const errorMsg = typeof image.error === 'string' ? image.error : 'Unknown error occurred';
+
   return (
     <motion.div
       className="bg-surface/50 backdrop-blur-sm border border-glass-border rounded-xl p-4 shadow-lg"
@@ -273,7 +276,7 @@ const ImageCard: React.FC<{
       <div className="text-center mb-3">
         <h3 className="font-heading text-accent-2 text-lg">{style}</h3>
         <p className="text-xs text-muted mt-1 h-8 line-clamp-2" title={scenario}>
-          {scenario}
+          {scenario || "Pending scenario..."}
         </p>
       </div>
 
@@ -309,7 +312,7 @@ const ImageCard: React.FC<{
           <div className="absolute inset-0 flex items-center justify-center p-4">
             <div className="text-center text-red-400">
               <div className="text-2xl mb-2">⚠️</div>
-              <p className="text-sm">{image.error}</p>
+              <p className="text-sm line-clamp-3">{errorMsg}</p>
             </div>
           </div>
         )}
@@ -361,6 +364,9 @@ const MediaGeneratorCard: React.FC<{
     }
   }, [state.status, loadingMessages]);
 
+  const hasImages = imageOptions && imageOptions.length > 0;
+  const errorString = typeof state.error === 'string' ? state.error : 'An unknown error occurred.';
+
   if (type === 'video' && !isApiKeySelected) {
     return (
       <motion.div
@@ -406,8 +412,10 @@ const MediaGeneratorCard: React.FC<{
           <select
             value={config.imageIndex}
             onChange={(e) => onConfigChange({ ...config, imageIndex: Number(e.target.value) })}
-            className="w-full bg-surface/30 border border-glass-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-accent focus:border-transparent"
+            className="w-full bg-surface/30 border border-glass-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-accent focus:border-transparent disabled:opacity-50"
+            disabled={!hasImages}
           >
+            {!hasImages && <option value={0}>Generate images first...</option>}
             {imageOptions.map(option => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -429,8 +437,8 @@ const MediaGeneratorCard: React.FC<{
             className="w-full bg-surface/30 border border-glass-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-accent focus:border-transparent"
           >
             {optionItems.map((item, index) => (
-              <option key={index} value={item}>
-                {item}
+              <option key={index} value={String(item)}>
+                {String(item)}
               </option>
             ))}
           </select>
@@ -438,10 +446,10 @@ const MediaGeneratorCard: React.FC<{
 
         <button
           onClick={onGenerate}
-          disabled={state.status === 'pending'}
-          className="w-full bg-accent text-white py-2 rounded font-medium hover:bg-accent/80 transition-colors disabled:opacity-50"
+          disabled={state.status === 'pending' || !hasImages}
+          className="w-full bg-accent text-white py-2 rounded font-medium hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {state.status === 'pending' ? 'Generating...' : `Generate ${type === 'video' ? 'Video' : 'Meme'}`}
+          {state.status === 'pending' ? 'Generating...' : !hasImages ? 'Awaiting Images' : `Generate ${type === 'video' ? 'Video' : 'Meme'}`}
         </button>
 
         {state.status === 'pending' && loadingMessages && (
@@ -491,7 +499,7 @@ const MediaGeneratorCard: React.FC<{
             animate={{ opacity: 1 }}
             className="text-center text-red-400 text-sm p-3 bg-red-400/10 rounded"
           >
-            {state.error}
+            {errorString}
           </motion.div>
         )}
       </div>
@@ -545,6 +553,10 @@ const App: React.FC = () => {
         if ((window as any).aistudio) {
             const hasKey = await (window as any).aistudio.hasSelectedApiKey();
             setIsApiKeySelected(hasKey);
+        } else {
+            // Ensure we don't block if not in IDX/AI Studio environment, assuming env var is there.
+            // If no env var and not in AI Studio, video gen will fail later with 400/403, which is handled.
+            setIsApiKeySelected(true);
         }
     };
     checkApiKey();
@@ -602,8 +614,7 @@ ${technicalRequirements.join('\n')}`;
 
       return resultUrl;
     } catch (err) {
-      const isQuotaError = err instanceof ApiError && err.isQuotaError;
-      const errorMessage = err instanceof Error ? err.message : "Generation failed";
+      const errorMessage = err instanceof Error ? err.message : String(err);
       throw new Error(errorMessage);
     }
   };
@@ -621,11 +632,13 @@ ${technicalRequirements.join('\n')}`;
         
         // Step 2: Generate 5 dynamic scenarios based on the descriptions
         const newSessionScenarios = await generateScenarios(personDesc, objectDesc, styleDesc, mainPrompt);
-        setSessionScenarios(newSessionScenarios);
+        // Ensure scenarios are strings
+        const safeScenarios = newSessionScenarios.map(s => String(s));
+        setSessionScenarios(safeScenarios);
 
         // Step 3: Generate an image for each scenario
         const results = await Promise.allSettled(
-          newSessionScenarios.map((scenario, index) =>
+          safeScenarios.map((scenario, index) =>
             generateImageForIndex(index, scenario, personImages, productImages, styleImages)
           )
         );
@@ -636,7 +649,7 @@ ${technicalRequirements.join('\n')}`;
           } else {
             return { 
               status: 'error' as const, 
-              error: result.reason.message,
+              error: String(result.reason.message || "Generation Failed"),
               isQuotaError: result.reason instanceof ApiError && result.reason.isQuotaError
             };
           }
@@ -648,9 +661,11 @@ ${technicalRequirements.join('\n')}`;
       () => {},
       (error) => {
         console.error("Generation failed:", error);
+        // STRICTLY ensure error is a string to prevent React Error #31 (Object as child)
+        const errorMsg = error instanceof Error ? error.message : String(error);
         setGeneratedImages(Array(IMAGE_COUNT).fill({ 
           status: 'error', 
-          error: error.message,
+          error: errorMsg,
           isQuotaError: error instanceof ApiError && error.isQuotaError
         }));
         setAppState('results-shown');
@@ -661,7 +676,6 @@ ${technicalRequirements.join('\n')}`;
   const handleRegenerateImage = async (index: number) => {
     if (!sessionScenarios[index]) return;
 
-    // FIX: The setter from useOptimistic expects the new value directly, not an updater function.
     const newOptimisticImages = [...optimisticImages];
     newOptimisticImages[index] = { status: 'pending' };
     setOptimisticImages(newOptimisticImages);
@@ -684,11 +698,12 @@ ${technicalRequirements.join('\n')}`;
       },
       () => {},
       (error) => {
+        const errorMsg = error instanceof Error ? error.message : String(error);
         setGeneratedImages(prev => {
           const newImages = [...prev];
           newImages[index] = { 
             status: 'error', 
-            error: error.message,
+            error: errorMsg,
             isQuotaError: error instanceof ApiError && error.isQuotaError
           };
           return newImages;
@@ -704,7 +719,6 @@ ${technicalRequirements.join('\n')}`;
     const newScenarios = [...sessionScenarios, customPrompt];
     
     setSessionScenarios(newScenarios);
-    // FIX: The setter from useOptimistic expects the new value directly, not an updater function.
     setOptimisticImages([...optimisticImages, { status: 'pending' }]);
 
     await generateMedia(
@@ -727,11 +741,12 @@ ${technicalRequirements.join('\n')}`;
       },
       () => {},
       (error) => {
+        const errorMsg = error instanceof Error ? error.message : String(error);
         setGeneratedImages(prev => {
           const newImages = [...prev];
           newImages[newIndex] = { 
             status: 'error', 
-            error: error.message 
+            error: errorMsg 
           };
           return newImages;
         });
@@ -767,7 +782,7 @@ ${technicalRequirements.join('\n')}`;
         setVideoState({ status: 'done', url: videoUrl });
       },
       (error) => {
-        let errorMessage = error.message;
+        let errorMessage = String(error.message || error);
         const isQuotaError = error instanceof ApiError && error.isQuotaError;
         if (errorMessage.includes("Requested entity was not found.")) {
             setIsApiKeySelected(false);
@@ -796,7 +811,7 @@ ${technicalRequirements.join('\n')}`;
       (error) => {
         setMemeState({ 
           status: 'error', 
-          error: error.message,
+          error: String(error.message || error),
           isQuotaError: error instanceof ApiError && error.isQuotaError
         });
       }
